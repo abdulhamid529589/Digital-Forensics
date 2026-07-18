@@ -1,556 +1,1070 @@
-# Digital Forensics — Practical Lab Notes (Part 2)
+# 🗂️ Windows File System Forensics — Comprehensive Lab Guide
 
-**Course:** Digital Forensics
-**Type:** Practical / Hands-on Lab
-**Continues from:** Part 1 (Data Recovery, Hashing/Integrity, Malware Identification via Hash, Forensic Imaging Basics)
+### Digital Forensics Practical Series | Part 2: File Systems, NTFS & Image Formats
 
----
-
-## Table of Contents
-
-1. [Introduction](#1-introduction)
-2. [The Sleuth Kit (TSK) — Command-Line File System Analysis](#2-the-sleuth-kit-tsk--command-line-file-system-analysis)
-3. [Understanding the Master File Table (MFT)](#3-understanding-the-master-file-table-mft)
-4. [Listing and Recovering Files via Command Line](#4-listing-and-recovering-files-via-command-line)
-5. [Data Recovery using WinHex](#5-data-recovery-using-winhex)
-6. [Forensic Image Formats — Theory](#6-forensic-image-formats--theory)
-7. [Creating Forensic Images — Practical (FTK Imager)](#7-creating-forensic-images--practical-ftk-imager)
-8. [Creating a Raw (DD) Image via Command Line](#8-creating-a-raw-dd-image-via-command-line)
-9. [Key Takeaways](#9-key-takeaways)
-10. [Tools Used in This Session](#10-tools-used-in-this-session)
+> **⚠️ Legal Notice:** All forensic investigation techniques must only be performed on systems you own or have explicit written authorization to examine, or on dedicated lab environments. Never examine original evidence — always work on forensic images.
 
 ---
 
-## 1. Introduction
+## 📋 Table of Contents
 
-This part picks up from where Part 1 ended — understanding the **Windows file system** in depth using command-line forensic tools, followed by a return to **data recovery** (this time using WinHex) and a detailed theoretical and practical exploration of **forensic image formats**.
-
-**Topics covered in this part:**
-
-- The Sleuth Kit (TSK) command-line toolset for file system analysis
-- Partition table inspection (`mmls`)
-- File system status inspection (`fsstat`)
-- Image metadata/statistics inspection (`img_stat`)
-- Master File Table (MFT) structure and metadata extraction (`istat`)
-- Listing files (`fls`) and recovering files (`tsk_recover`) via command line
-- Data recovery using WinHex
-- Forensic image formats: RAW/DD, SMART, E01, AFF, and MEM
-- Practical image creation using FTK Imager and the command-line `dd` tool
+1. [Windows File System Overview](#1-windows-file-system-overview)
+2. [The Sleuth Kit — Command Line Forensics](#2-the-sleuth-kit--command-line-forensics)
+3. [Master File Table (MFT) Deep Dive](#3-master-file-table-mft-deep-dive)
+4. [Forensic Image Formats](#4-forensic-image-formats)
+5. [Creating Forensic Images — Practical Lab](#5-creating-forensic-images--practical-lab)
+6. [File Recovery via Command Line](#6-file-recovery-via-command-line)
+7. [WinHex — Advanced Data Recovery](#7-winhex--advanced-data-recovery)
+8. [Memory Forensics Basics](#8-memory-forensics-basics)
+9. [Cheat Sheet — All Commands](#9-cheat-sheet--all-commands)
 
 ---
 
-## 2. The Sleuth Kit (TSK) — Command-Line File System Analysis
+## 1. Windows File System Overview
 
-### 2.1 About the Tool
+### 1.1 What Is a File System?
 
-**The Sleuth Kit (TSK)** is a well-known, free, command-line-based digital forensics tool used to analyze file systems and disk images. It does not require installation in the traditional sense — it is run directly from its folder via Command Prompt (CMD).
+A file system is the method an operating system uses to **organize, store, and retrieve data** on a disk. Without a file system, data would be an unorganized pile of bits.
 
-> **Note:** Another tool, Autopsy, is mentioned as a GUI counterpart that works alongside The Sleuth Kit, but this session focuses on the command-line usage.
+| OS               | Primary File System | Notes                                          |
+| ---------------- | ------------------- | ---------------------------------------------- |
+| Windows (modern) | NTFS                | Most common; supports large files, permissions |
+| Windows (old)    | FAT32               | USB drives, older systems; simpler structure   |
+| Linux            | ext4                | Default Linux file system                      |
+| macOS            | APFS                | Apple File System (modern Macs)                |
+| All (USB)        | exFAT               | Cross-platform compatible                      |
 
-### 2.2 Setting Up
-
-1. Navigate to the folder where The Sleuth Kit is installed/extracted.
-2. In the address bar of File Explorer, type `cmd` and press Enter — this opens Command Prompt **already pointed at that folder location**, saving the effort of manually navigating via `cd` commands.
-
-### 2.3 `mmls` — Media Management List
-
-**Purpose:** Displays the **partition table** of an evidence file (disk image) — i.e., all partitions present on the imaged drive, including allocated and unallocated space.
-
-**Command structure:**
+### 1.2 Disk Structure Hierarchy
 
 ```
-mmls "<path-to-evidence-image>"
+Physical Disk (Hard Drive / SSD / USB)
+│
+├── Partition Table (MBR or GPT)
+│   ├── Partition 1 (e.g., C: drive — NTFS)
+│   ├── Partition 2 (e.g., D: drive — NTFS)
+│   ├── Partition 3 (e.g., Recovery — NTFS)
+│   └── Unallocated Space
+│
+└── Each Partition Contains:
+    ├── Boot Sector
+    ├── Master File Table (NTFS)
+    └── File Data Areas
 ```
 
-**Key syntax notes:**
-
-- `mmls` = **M**edia **M**anagement **L**i**s**t.
-- Quotation marks (`" "`) around the file path are good practice (not strictly mandatory) — they correctly delimit where the file path starts and ends, especially important if the path contains spaces.
-- **Common error encountered:** Forgetting to include a **space** between `mmls` and the quoted path causes a _"system cannot find the path specified"_ error. This is a frequent human/syntax error in command-line forensics work.
-
-**What the output shows:**
-
-- A full **partition table**, equivalent to what you'd see graphically in Windows Disk Management.
-- Each partition is numbered (e.g., 0, 1, 2, 3...) and shows:
-  - Start and end **sector** numbers
-  - A description of each entry (e.g., partition type)
-  - Whether the space is **allocated** or **unallocated**
-
-> **Allocated vs. Unallocated Space:**
->
-> - **Allocated space** — disk space currently assigned to a partition and usable/visible to the OS.
-> - **Unallocated space** — space present on the physical disk but not assigned/usable until formatted/allocated. This is significant in forensics because deleted data often persists in unallocated space until overwritten.
-
-**Getting help:** Typing `mmls` alone (without arguments) displays the tool's built-in help/usage information, including available flags.
-
-**Useful flag — `-h` (hide):**
+### 1.3 Allocated vs. Unallocated Space
 
 ```
-mmls -h "<path-to-evidence-image>"
+Allocated Space:
+   → Disk space that has been assigned to a file system partition
+   → Visible and accessible to the OS
+   → Files are stored here
+
+Unallocated Space:
+   → Disk space not yet assigned to any partition
+   → OS cannot use it until allocated
+   → May contain remnants of old data (forensically valuable!)
+   → Visible in Disk Management as "Unallocated"
 ```
 
-Hides metadata/volume details for a cleaner view of just the partition table (the demonstration showed this toggling between showing and hiding metadata volumes).
+**Viewing partitions graphically:**
+
+```
+Windows → Right-click "This PC" → Manage → Disk Management
+```
+
+### 1.4 Sectors and Clusters
+
+```
+Sector:    Smallest physical unit of disk storage = 512 bytes (traditional)
+                                                   or 4096 bytes (modern Advanced Format)
+Cluster:   Logical grouping of sectors (defined by file system)
+           Typically 4KB to 64KB in size
+
+File occupies one or more clusters.
+If a file is smaller than a cluster, the leftover space is called "slack space"
+Slack space can contain fragments of previously deleted files — valuable for forensics!
+```
 
 ---
 
-### 2.4 `fsstat` — File System Status
+## 2. The Sleuth Kit — Command Line Forensics
 
-**Purpose:** Displays detailed status information about the **file system** of a partition/image — including which operating system's file system is in use (e.g., NTFS) and detailed structural parameters.
+### 2.1 What Is The Sleuth Kit (TSK)?
 
-**Command structure:**
+The Sleuth Kit (TSK) is a **free, open-source command-line digital forensics toolkit** used by law enforcement and security professionals worldwide. It is the engine behind Autopsy (GUI).
+
+**Download:** https://www.sleuthkit.org/sleuthkit/
+
+**Key tools inside TSK:**
+
+| Command       | Full Name             | Purpose                             |
+| ------------- | --------------------- | ----------------------------------- |
+| `mmls`        | Media Management List | Show partition table                |
+| `fsstat`      | File System Status    | Show file system details            |
+| `img_stat`    | Image Status          | Show image file details             |
+| `istat`       | Inode Status          | Show file metadata (MFT entry)      |
+| `fls`         | File List             | List files and directories          |
+| `tsk_recover` | TSK Recover           | Recover all files from image        |
+| `blkls`       | Block List            | List data blocks                    |
+| `ils`         | Inode List            | List all inodes (including deleted) |
+
+### 2.2 Opening TSK via Command Line
 
 ```
-fsstat "<path-to-evidence-image>"
+Step 1: Navigate to TSK installation folder
+        e.g., C:\sleuthkit\bin\
+
+Step 2: Click on the address bar in File Explorer
+        Type: cmd
+        Press Enter
+
+→ CMD opens directly inside the TSK bin folder
+→ All TSK commands are now available
 ```
 
-**Tips:**
+### 2.3 Lab: View Partition Table with mmls
 
-- Use the **Up Arrow key** in CMD to recall and edit previous commands instead of retyping the full path each time — a practical time-saver during repeated command-line forensic work.
-- This command works reliably in **CMD**, not in PowerShell (noted by the instructor as a practical compatibility issue).
+**mmls = Media Management List**
+Lists all partitions on a disk image or physical device.
 
-**Key output fields explained:**
+```bash
+# Syntax
+mmls [options] <image_file>
 
-| Field                               | Meaning                                                                                 |
-| ----------------------------------- | --------------------------------------------------------------------------------------- |
-| **Volume Serial Number**            | Unique identifier of the volume                                                         |
-| **File System Type**                | e.g., NTFS                                                                              |
-| **Volume Name**                     | The label given to the volume                                                           |
-| **Master File Table (MFT) info**    | Indicates the system uses MFT to manage all file/folder metadata within the partition   |
-| **Index/Record Range**              | Typically 0–128 for core system metadata entries; root directory is commonly at entry 5 |
-| **Sector Size**                     | Commonly 512 bytes                                                                      |
-| **Cluster Range**                   | Cluster size/allocation details                                                         |
-| **Standard Information attributes** | Additional structural/eligible value details                                            |
+# Basic usage — view partition table
+mmls "C:\forensics\evidence\windows_image.E01"
 
-> **What is the MFT?** The **Master File Table** is the core structure NTFS uses to store metadata about every file and folder in a partition — essentially a master index/catalog of the entire file system. This becomes the central focus of the next section.
+# With space between command and path:
+mmls "C:\forensics\images\evidence.dd"
+```
 
-**Troubleshooting note:** If `fsstat` returns _"Cannot determine file system,"_ it may indicate an incorrect/mismatched evidence file was specified. The instructor demonstrated swapping to a different evidence file to resolve this.
+**Sample output:**
+
+```
+DOS Partition Table
+Offset Sector: 0
+Units are in 512-byte sectors
+
+      Slot      Start        End          Length       Description
+000:  Meta      0000000000   0000000000   0000000001   Primary Table (#0)
+001:  -------   0000000000   0000002047   0000002048   Unallocated
+002:  000:000   0000002048   0000206847   0000204800   NTFS / exFAT (0x07)
+003:  000:001   0000206848   0000411647   0000204800   NTFS / exFAT (0x07)
+004:  -------   0000411648   0000419429   0000007782   Unallocated
+```
+
+**Reading the output:**
+
+- `Start` / `End` = sector numbers where partition begins and ends
+- `Length` = size of partition in sectors
+- `NTFS / exFAT` = file system type
+- `Unallocated` = space not assigned to any partition
+
+**Getting help for any TSK command:**
+
+```bash
+mmls       # shows help and all available options
+mmls -h    # explicit help flag
+```
+
+### 2.4 Lab: Check File System Status with fsstat
+
+**fsstat = File System Status**
+Reveals file system details: type, volume name, cluster size, MFT location, etc.
+
+```bash
+# Syntax — must specify file system type (-f) and image file
+fsstat -f ntfs "C:\forensics\images\windows.dd"
+
+# For a specific partition offset (from mmls output):
+# If partition starts at sector 2048, sector size = 512 bytes:
+# Offset = 2048 * 512 = 1048576 bytes
+fsstat -f ntfs -o 2048 "C:\forensics\images\windows.dd"
+```
+
+**Key information in fsstat output:**
+
+```
+File System Type: NTFS
+Volume Serial Number: XXXXXXXXXXXXXXXX
+OEM Name: NTFS
+Volume Name: [Drive Label]
+File System Type: NTFS
+Cluster Size: 4096 bytes
+Total Cluster Range: 0 - 15728639
+Total Sector Range: 0 - 125829119
+
+$MFT Entry:     Starting at Cluster XXXX
+$MFTMirr Entry: Starting at Cluster XXXX
+
+Metadata Information:
+Root Directory: 5
+```
+
+### 2.5 Lab: Check Image Status with img_stat
+
+**img_stat = Image Statistics**
+Shows image file format, size, and sector information.
+
+```bash
+img_stat "C:\forensics\images\windows.dd"
+```
+
+**Sample output:**
+
+```
+IMAGE FILE INFORMATION
+--------------------------------------------
+Image Type: raw
+
+Size in bytes: 64424509440
+Sector size: 512
+```
+
+Image types that may appear: `raw`, `ewf` (E01), `aff`
 
 ---
 
-### 2.5 `img_stat` — Image Statistics
+## 3. Master File Table (MFT) Deep Dive
 
-**Purpose:** Displays statistics/details about the **image file itself** (as opposed to the file system within it).
+### 3.1 What Is the MFT?
 
-**Command structure:**
+The **Master File Table (MFT)** is the heart of NTFS. It is a special database that stores metadata for **every file and directory** on an NTFS volume.
+
+Think of it as the **index of a book** — it tells you where everything is and details about it.
 
 ```
-img_stat "<path-to-evidence-image>"
+MFT Structure:
+┌─────────────────────────────────────────────┐
+│              Master File Table               │
+├──────┬───────────────────────────────────────┤
+│ #0   │ $MFT itself                           │
+│ #1   │ $MFTMirr — Mirror/backup copy of MFT  │
+│ #2   │ $LogFile — Transaction log            │
+│ #3   │ $Volume — Volume information          │
+│ #4   │ $AttrDef — Attribute definitions      │
+│ #5   │ . (root directory)                    │
+│ #6   │ $Bitmap — Cluster allocation map      │
+│ #7   │ $Boot — Boot sector                   │
+│ #8   │ $BadClus — Bad cluster list           │
+│ #9   │ $Secure — Security descriptors        │
+│ #10  │ $UpCase — Uppercase filename table    │
+│ #11  │ $Extend — Extended metadata           │
+│ #12-15│ Reserved for future use             │
+│ #16  │ User files and directories begin here │
+│ ...  │ ...                                   │
+└──────┴───────────────────────────────────────┘
 ```
 
-**Key output fields:**
+### 3.2 MFT Entry Attributes
 
-- **Image Type:** e.g., RAW or DD (common raw, uncompressed image types)
-- **Size in bytes**
-- **Sector size**
+Each MFT entry (file record) contains these **attributes**:
+
+```
+┌─────────────────────────┬────────────────────────────────────────────────┐
+│ Attribute               │ Contents                                       │
+├─────────────────────────┼────────────────────────────────────────────────┤
+│ $STANDARD_INFORMATION   │ Timestamps (created, modified, accessed,       │
+│                         │ MFT-changed), file flags, owner ID             │
+├─────────────────────────┼────────────────────────────────────────────────┤
+│ $FILE_NAME              │ File name, parent directory reference,         │
+│                         │ file size (allocated + actual), timestamps     │
+├─────────────────────────┼────────────────────────────────────────────────┤
+│ $DATA                   │ The actual file content (for small files,      │
+│                         │ stored directly in MFT; large files point      │
+│                         │ to clusters on disk)                           │
+├─────────────────────────┼────────────────────────────────────────────────┤
+│ $BITMAP                 │ Tracks which clusters are in use for           │
+│                         │ a directory or the volume itself               │
+├─────────────────────────┼────────────────────────────────────────────────┤
+│ $SECURITY_DESCRIPTOR    │ Access control: who can read/write/execute,    │
+│                         │ file ownership, permissions                    │
+├─────────────────────────┼────────────────────────────────────────────────┤
+│ $INDEX_ROOT             │ Directory index (lists files in a folder)      │
+│ $INDEX_ALLOCATION       │ Used for large directories                     │
+└─────────────────────────┴────────────────────────────────────────────────┘
+```
+
+### 3.3 Lab: Extracting MFT Entry Metadata with istat
+
+**istat = Inode/MFT entry Status**
+Displays all metadata stored in a specific MFT entry number.
+
+```bash
+# Syntax
+istat -f ntfs "image_file" <entry_number>
+
+# View MFT entry #0 ($MFT itself)
+istat -f ntfs "C:\forensics\images\windows.dd" 0
+
+# View MFT entry #1 ($MFTMirr — mirror file)
+istat -f ntfs "C:\forensics\images\windows.dd" 1
+
+# View MFT entry #2 ($LogFile)
+istat -f ntfs "C:\forensics\images\windows.dd" 2
+
+# View MFT entry #3 ($Volume)
+istat -f ntfs "C:\forensics\images\windows.dd" 3
+
+# View root directory (#5)
+istat -f ntfs "C:\forensics\images\windows.dd" 5
+```
+
+**Sample output for entry #0:**
+
+```
+MFT Entry Header Values:
+Entry: 0        Sequence: 1
+$LogFile Sequence Number: XXXXXXXXXX
+Allocated File
+
+$STANDARD_INFORMATION Attribute Values:
+Created:   2019-07-22 11:37:31 (IST)
+File Modified: 2019-07-22 11:37:31 (IST)
+MFT Modified:  2019-07-22 11:37:31 (IST)
+Accessed:  2019-07-22 11:37:31 (IST)
+
+$FILE_NAME Attribute Values:
+Parent MFT Entry: 5   Seq: 1
+Name: $MFT
+Allocated Size: 0   Actual Size: 0
+
+$DATA Attribute Values:
+Size: [actual MFT size in bytes]
+```
+
+### 3.4 The Four Timestamps (MACB)
+
+NTFS tracks four timestamps per file, critical for timeline analysis:
+
+```
+M — Modified:  When was the FILE CONTENT last changed?
+A — Accessed:  When was the file last opened/read?
+C — Changed:   When was the MFT entry last changed? (metadata change)
+B — Born:      When was the file CREATED?
+
+These are stored in $STANDARD_INFORMATION and $FILE_NAME attributes.
+
+⚠️ Forensic Note: $STANDARD_INFORMATION timestamps can be modified by
+   tools (anti-forensics). $FILE_NAME timestamps are harder to fake.
+   Always compare both sets!
+```
+
+### 3.5 MFT Entry Numbers — Reference Table
+
+| Entry # | System File | Contents                                 |
+| ------- | ----------- | ---------------------------------------- |
+| 0       | $MFT        | Master File Table itself                 |
+| 1       | $MFTMirr    | Backup copy of first 4 MFT entries       |
+| 2       | $LogFile    | Transaction log for recovery             |
+| 3       | $Volume     | Volume name, version, flags              |
+| 4       | $AttrDef    | Attribute type definitions               |
+| 5       | . (dot)     | Root directory                           |
+| 6       | $Bitmap     | Cluster allocation map                   |
+| 7       | $Boot       | Boot sector / BPB                        |
+| 8       | $BadClus    | Bad cluster list                         |
+| 9       | $Secure     | Security descriptors                     |
+| 10      | $UpCase     | Uppercase conversion table               |
+| 11      | $Extend     | Extended metadata directory              |
+| 12–15   | (Reserved)  | Future use                               |
+| 16+     | User files  | Your actual files and folders begin here |
+
+### 3.6 Lab: List All Files with fls
+
+**fls = File List**
+Lists all files and directories in a file system, including deleted ones.
+
+```bash
+# List all files (including deleted — marked with *)
+fls -f ntfs "C:\forensics\images\windows.dd"
+
+# List files in a specific directory (entry number from fls output)
+fls -f ntfs "C:\forensics\images\windows.dd" 5
+
+# Recursive listing of all files
+fls -r -f ntfs "C:\forensics\images\windows.dd"
+
+# Show deleted files only
+fls -d -f ntfs "C:\forensics\images\windows.dd"
+
+# Full path output (useful for timeline)
+fls -r -p -f ntfs "C:\forensics\images\windows.dd"
+```
+
+**Reading fls output:**
+
+```
+r/r 48-128-1: secret_document.docx         ← regular file, allocated
+d/d 5:        .                             ← directory (root)
+r/r * 93-128-1: deleted_file.txt           ← * = deleted file!
+```
 
 ---
 
-## 3. Understanding the Master File Table (MFT)
+## 4. Forensic Image Formats
 
-### 3.1 Conceptual Overview
+### 4.1 Overview
 
-The **MFT** is the central structure NTFS uses to track every file and folder. It can be conceptually compared to:
-
-- A **book's index**, where each chapter/section number corresponds to a specific category of information, or
-- A **folder system**, where the MFT is the outer folder and each numbered "entry" inside it is like a sub-section containing specific details.
-
-Each entry in the MFT is identified by a **number**, and querying a specific number reveals a corresponding category of metadata.
-
-### 3.2 Extracting MFT Entry Details — `istat`
-
-**Command structure:**
+When creating a forensic image, the format you choose determines what metadata is stored, whether compression is applied, and which tools can open it.
 
 ```
-istat -f ntfs "<path-to-evidence-image>" <entry-number>
+┌──────────┬────────────────────────────────────────────────────────────────┐
+│ Format   │ Full Name                                                      │
+├──────────┼────────────────────────────────────────────────────────────────┤
+│ DD / RAW │ Raw disk image (no format overhead)                            │
+│ SMART    │ Simple Management Artifact Recovery Technology                 │
+│ E01      │ Expert Witness Format (by Guidance Software / EnCase)          │
+│ AFF      │ Advanced Forensic Format                                       │
+│ MEM      │ Memory Image (for RAM dumps)                                   │
+└──────────┴────────────────────────────────────────────────────────────────┘
 ```
 
-**Syntax notes:**
+### 4.2 Detailed Format Comparison
 
-- `-i` is used for general image/info statistics; `-f` is used to **specify the file system type** (e.g., NTFS) — necessary because the system couldn't auto-determine it earlier.
-- The **entry number must be separated by a space** from the rest of the command — a missing space was again demonstrated as a common source of command errors.
-- `0` (zero) as the entry number refers to **entry zero of the MFT** — the root/primary metadata entry for the MFT itself.
+```
+┌─────────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+│ Feature     │ DD/RAW   │ SMART    │ E01      │ AFF      │ MEM      │
+├─────────────┼──────────┼──────────┼──────────┼──────────┼──────────┤
+│ Extension   │ .dd/.img │ .s01     │ .E01     │ .aff     │ .mem/.dmp│
+│ Compression │ ❌ No    │ ✅ Yes   │ ✅ Yes   │ ✅ Yes   │ ❌ No    │
+│ Metadata    │ ❌ No    │ ✅ Yes   │ ✅ Yes   │ ✅ Yes   │ N/A      │
+│ Encryption  │ ❌ No    │ ❌ No    │ ✅ Yes   │ ✅ Yes   │ No       │
+│ Checksums   │ ❌ No    │ ✅ Yes   │ ✅ Yes   │ ✅ Yes   │ Varies   │
+│ Segmented   │ ❌ No    │ Optional │ ✅ Yes   │ Optional │ No       │
+│ Open Source │ ✅ Yes   │ ❌ No    │ ❌ No    │ ✅ Yes   │ ✅ Yes   │
+│ Tool Support│ Wide     │ Limited  │ Wide     │ Moderate │ Wide     │
+│ File Size   │ = Source │ Smaller  │ Smaller  │ Smaller  │ = RAM    │
+└─────────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+```
 
-### 3.3 Key MFT Entry Numbers and What They Represent
+### 4.3 Format Details
 
-| Entry #   | Section                                       | Description                                                                                                                                                                          |
-| --------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **0**     | $MFT (Master File Table itself)               | Complete metadata about the MFT; root entry point for system metadata                                                                                                                |
-| **1**     | $MFTMirr (MFT Mirror)                         | A backup/duplicate copy of part of the MFT, used to **cross-verify/compare** in case of corruption — similar in principle to comparing two copies of evidence to confirm consistency |
-| **2**     | $LogFile (Log File)                           | Records all actions/operations performed on the file system — i.e., a system activity log                                                                                            |
-| **3**     | $Volume                                       | Stores volume-level information: when the volume was created, size allocated, etc.                                                                                                   |
-| **4**     | $AttrDef (Attribute Definition Table)         | Defines all possible attribute types and their properties used across the file system                                                                                                |
-| **5**     | (Root directory / standard info, second copy) | Standard information details, similar structure to entry 0 but representing root-level metadata                                                                                      |
-| **6**     | $Bitmap                                       | Maps which clusters/sectors are allocated to which files — handles size/space mapping across the file system                                                                         |
-| **7–8**   | $Boot / Bad Cluster file                      | Entry 7 relates to boot file data; entry 8 (`$BadClus`) lists **bad clusters** — clusters that exist physically but cannot reliably store data                                       |
-| **9**     | $Secure                                       | Stores **security descriptor** data — permissions, ownership (e.g., administrator vs. local user access)                                                                             |
-| **10–11** | $Upcase and related system files              | Case-mapping and other system definition tables                                                                                                                                      |
-| **12–15** | Reserved                                      | Reserved for future system use; **no file name is associated** with these entries since they are placeholders                                                                        |
-| **16**    | User directory / file entries begin           | Marks where actual user-created file and directory entries start being indexed                                                                                                       |
+#### DD / RAW Format
 
-### 3.4 Sub-Attributes Within Each MFT Entry
+```
+Extension:   .dd  or  .img  or  .raw
+Description: Exact bit-for-bit copy of a drive
+             No headers, no metadata, no compression
 
-When examining a specific MFT entry (e.g., entry 0), several **sub-sections (attributes)** appear within it:
+Advantages:
+  ✅ Universal compatibility — works with almost every tool
+  ✅ Simple format — no proprietary overhead
+  ✅ Can be created with built-in OS tools (dd command)
 
-1. **Standard Information**
-   - Contains core timestamps and properties: **created date**, **last modified date**, **last MFT-record-modified date**, **last accessed date**.
-   - Also includes an **Attribute ID** (used for verification/security key referencing).
+Disadvantages:
+  ❌ Same size as source (no compression = large files)
+  ❌ No metadata storage (no case number, examiner, etc.)
+  ❌ No built-in integrity checking
 
-2. **File Name**
-   - Stores the actual **name of the file**, its **parent entry** (i.e., which directory it belongs to), file size (in bytes), and creation details specific to the name attribute.
-   - Demonstrated distinction: Standard Information holds _when_ things happened; File Name holds _what it's called and where it sits in the hierarchy_.
+Best for:
+  → Quick imaging when tool compatibility is critical
+  → Linux-based investigations
+  → When simplicity is preferred over features
+```
 
-3. **Data**
-   - Contains (or points to) the **actual content/data** of the file — e.g., the real bytes of a document, image, or video stored within that entry.
-   - Includes **size** and **initial size** fields (in bytes) describing how much actual data is stored.
+#### E01 Format (Expert Witness Format)
 
-4. **Bitmap** (within an entry context)
-   - Performs **bit-mapping** — tracking how much space/size is allocated to which file, helping manage storage distribution at a granular level.
+```
+Extension:   .E01, .E02, .E03, ... (segmented)
+Developed by: Guidance Software (now OpenText)
+Description: Most widely used forensic image format in legal proceedings
 
-5. **Security Descriptor** (when present)
-   - Contains security-related details: **permissions** and **ownership** (e.g., whether the administrator or a local user has access rights).
+Advantages:
+  ✅ Stores full case metadata (case #, examiner, date, notes)
+  ✅ Built-in MD5 and SHA-1 checksums per segment
+  ✅ Compression reduces storage requirements
+  ✅ Automatically splits into 2GB segments
+  ✅ Supported by: EnCase, FTK, Autopsy, X-Ways, Magnet Axiom
 
-### 3.5 Practical Demonstration Summary
+Disadvantages:
+  ❌ Proprietary format (not open standard)
+  ❌ Not supported by every tool
 
-- Running `istat ... 0` displayed entry 0's full metadata (the MFT's own record), including header values like:
-  - **Entry number**, **sequence number**, **log file sequence number**
-  - **Allocated/unallocated status** of the file
-  - **Link count**
-- The instructor deliberately omitted required spaces in commands at multiple points to illustrate **common syntax errors** and how to self-correct them — reinforcing that most command-line errors in forensic tools are human/formatting errors rather than tool malfunctions.
-- Running `istat` with different entry numbers (1 for MFT Mirror, 2 for Log File, 3 for Volume, etc.) returned the corresponding metadata sections as outlined in the table above.
-- Entry 16 (reserved) was shown to return incomplete output (no file name) since it is a placeholder, reinforcing the reserved-entry concept.
+Best for:
+  → Court evidence (most recognized format)
+  → When metadata storage is required
+  → When storage space is a concern
+  → Professional investigations
+
+Segment naming:
+  evidence.E01  ← First segment (main file)
+  evidence.E02  ← Second segment
+  evidence.E03  ← Third segment
+  (Open E01 and all segments load automatically)
+```
+
+#### AFF Format (Advanced Forensic Format)
+
+```
+Extension:   .aff
+Developed by: Simson Garfinkel (open source)
+Description: Open-source forensic format designed for long-term evidence preservation
+
+Advantages:
+  ✅ Fully open source — no vendor lock-in
+  ✅ Works with any compatible tool
+  ✅ Supports compression, metadata, AND encryption
+  ✅ Designed specifically for forensic evidence
+
+Disadvantages:
+  ❌ Less widely supported than E01
+  ❌ Moderate tool adoption
+
+Best for:
+  → When vendor neutrality is important
+  → Long-term evidence archiving
+  → When encryption of evidence is required
+```
+
+#### SMART Format
+
+```
+Extension:   .s01
+Full Name:   Simple Management Artifact Recovery Technology
+Description: Proprietary to SMART Forensic software
+
+Advantages:
+  ✅ Supports compression
+  ✅ Stores metadata and timestamps
+
+Disadvantages:
+  ❌ Only works with SMART forensic tool
+  ❌ Very limited tool support
+
+Best for:
+  → Use only when working specifically with SMART software
+```
+
+#### MEM / Memory Image Format
+
+```
+Extension:   .mem, .dmp, .raw
+Description: Image of volatile memory (RAM)
+             NOT used for hard drives — only for RAM dumps
+
+Why RAM matters forensically:
+  → Running processes captured at time of imaging
+  → Encryption keys may be in memory
+  → Network connections visible
+  → User activity (typed passwords, clipboard)
+  → Malware that only exists in RAM (fileless malware)
+
+Key rule: Image RAM BEFORE shutting down a running system
+          (RAM is cleared on shutdown!)
+```
+
+### 4.4 Format Selection Guide
+
+```
+Question: What do you need?
+
+Need maximum compatibility?          → Use DD/RAW
+Need court-ready evidence?           → Use E01
+Need vendor independence?            → Use AFF
+Need to capture running PC's RAM?    → Use MEM/DMP
+Working only with SMART software?    → Use SMART
+
+For most professional investigations: E01 is the recommended standard
+```
 
 ---
 
-## 4. Listing and Recovering Files via Command Line
+## 5. Creating Forensic Images — Practical Lab
 
-### 4.1 `fls` — File List
+### 5.1 Creating E01 Format with FTK Imager (GUI)
 
-**Purpose:** Lists all files (including deleted/orphan files) present within the file system of the evidence image.
+FTK Imager is free and produces court-ready E01 images.
 
-**Command structure:**
-
-```
-fls -f ntfs "<path-to-evidence-image>"
-```
-
-**Notes:**
-
-- `fls` = **F**i**l**e **L**i**s**t.
-- The output includes regular files as well as **orphan files** (files with metadata entries but disconnected/orphaned references — effectively "useless" or incomplete file records).
-- This step is useful for getting a full inventory of what exists (and what was deleted) within the file system before deciding what to recover.
-
-### 4.2 `tsk_recover` — Recovering Files via Command Line
-
-**Purpose:** Recovers files (both allocated and unallocated/deleted) directly from the evidence image into a specified destination folder — entirely through the command line, as an alternative to GUI-based recovery tools.
-
-**Preparation:**
-
-- Create an **empty destination folder** beforehand (confirmed empty before running the command) to receive recovered files.
-
-**Command structure:**
+**Download:** https://www.exterro.com/ftk-imager
 
 ```
-tsk_recover -i raw -e "<path-to-evidence-image>" "<destination-folder-path>"
+Step 1: Open FTK Imager → File → Create Disk Image
+
+Step 2: Select source type:
+   Physical Drive  → Entire drive (all partitions)
+   Logical Drive   → Single partition (C:, D:, etc.)
+   Image File      → Image of an existing image (for conversion)
+
+Step 3: Select your target drive from the list
+        (use a hardware write blocker!)
+
+Step 4: Click "Add" to add destination
+   Select image type: E01 (EnCase Image File Format)
+
+Step 5: Fill in evidence metadata
+   Case Number:        CASE-2025-001
+   Evidence Number:    E001
+   Unique Description: USB Drive 16GB SanDisk
+   Examiner:           [Your Name]
+   Notes:              Seized from suspect on 2025-08-21
+
+Step 6: Set destination path
+        → Select a DIFFERENT drive (NOT the source drive)
+        → Name: evidence_usb_2025-08-21
+        → Image fragment size: 0 (auto) or 2000 MB
+
+Step 7: Options
+   ✅ Verify images after they are created
+   ✅ Create directory listings
+
+Step 8: Start imaging → Finish
+   Progress bar shows completion
+   On finish: MD5 and SHA1 hash values shown
+
+Step 9: Save verification report
+   Shows: Source hash vs. Destination hash (must match!)
 ```
 
-**Flag explanations:**
+**After imaging, you will have:**
 
-- `-i` — specifies the **image type** (e.g., `raw`).
-- `-e` — instructs the tool to recover **both allocated and unallocated (deleted)** files (a comprehensive recovery, rather than only currently-existing files).
-- A **space** must separate the destination path from the rest of the command (again flagged as a common error source).
+```
+evidence_usb_2025-08-21.E01       ← First segment
+evidence_usb_2025-08-21.E02       ← Second segment (if >2GB)
+evidence_usb_2025-08-21.txt       ← Hash and metadata report
+```
 
-**Result of the demonstration:**
+### 5.2 Creating DD Format with Command Line (Windows)
 
-- The recovery process completed successfully, recovering **1,097 files**.
-- Minor errors during recovery are common and can generally be **ignored** unless they stem from an incorrect command syntax.
-- Recovered content included:
-  - Files originally found in the **Recycle Bin**
-  - **Audio files** (songs)
-  - **Images**
-  - A **password-protected PDF** (confirmed still password-protected post-recovery — demonstrating that recovery preserves file-level protections)
-  - **PPT files**, **text files**, and other miscellaneous documents
+**Using the dd tool for Windows:**
 
-### 4.3 Key Lessons
+```powershell
+# Step 1: List all disks to find target
+wmic diskdrive list brief /format:list
 
-- The Sleuth Kit provides a complete command-line workflow: partition inspection (`mmls`) → file system status (`fsstat`) → image statistics (`img_stat`) → MFT entry inspection (`istat`) → file listing (`fls`) → file recovery (`tsk_recover`).
-- The MFT is the structural backbone of NTFS, and understanding its entry numbering scheme allows an investigator to manually inspect any category of file system metadata.
-- Command-line forensic work is precise — small formatting errors (missing spaces, wrong flags) are common and must be carefully debugged, but they do not indicate tool failure.
+# Output example:
+# DeviceID = \\.\PHYSICALDRIVE0   ← Internal C: drive
+# DeviceID = \\.\PHYSICALDRIVE1   ← External / USB drive
+# Caption = Generic-       Mass Storage USB Device
+
+# Step 2: Navigate to dd tool folder
+cd C:\tools\dd\
+
+# Step 3: Create DD image
+# if = input file (source drive)
+# of = output file (destination — must be different drive!)
+# bs = block size (512 or 64k for speed)
+# --progress = show progress
+
+dd if=\\.\PHYSICALDRIVE1 of=E:\evidence\drive_image.dd bs=512k --progress
+
+# Creating image of a specific partition (logical drive):
+dd if=\\.\G: of=E:\evidence\partition_g.dd bs=512k --progress
+```
+
+**DD image characteristics:**
+
+```
+Size:     Exactly same as source (no compression)
+Format:   Raw binary — no headers or metadata
+Metadata: None embedded — document separately in case notes!
+Hash:     Calculate manually after creation:
+```
+
+```powershell
+# Calculate and record hashes after dd imaging
+Get-FileHash E:\evidence\drive_image.dd -Algorithm MD5
+Get-FileHash E:\evidence\drive_image.dd -Algorithm SHA256
+```
+
+### 5.3 Creating DD Format with dd on Linux/Kali
+
+```bash
+# List drives
+lsblk
+fdisk -l
+
+# Basic dd imaging
+dd if=/dev/sdb of=/mnt/external/evidence.dd bs=4M status=progress
+
+# With hash generation during imaging (dc3dd)
+apt install dc3dd
+dc3dd if=/dev/sdb of=/mnt/external/evidence.dd hash=sha256 log=/mnt/external/hash.log
+
+# Verify image matches source
+sha256sum /dev/sdb
+sha256sum /mnt/external/evidence.dd
+# Must be identical!
+
+# Creating E01 on Linux (using ewfacquire)
+apt install libewf-dev ewf-tools
+ewfacquire /dev/sdb
+# Prompts for case info → creates evidence.E01
+```
+
+### 5.4 Verifying Image Integrity
+
+After imaging, **always verify** the hash of source matches the image:
+
+```bash
+# Linux
+md5sum /dev/sdb                          # Source hash
+md5sum /mnt/external/evidence.dd         # Image hash
+# Must match!
+
+# Windows (PowerShell)
+Get-FileHash \\.\PHYSICALDRIVE1 -Algorithm MD5   # Source (may need admin)
+Get-FileHash evidence.dd -Algorithm MD5          # Image hash
+```
 
 ---
 
-## 5. Data Recovery using WinHex
+## 6. File Recovery via Command Line
 
-### 5.1 About the Tool
+### 6.1 Lab: Recovering All Files with tsk_recover
 
-**WinHex** is a hex-editing and data-recovery tool with a dedicated website for download. Like other forensic recovery tools, it is used to recover deleted files from a **copy (image)** of the evidence — reinforcing the principle that **original evidence is never directly investigated**.
+**tsk_recover** extracts all allocated AND unallocated files from a forensic image.
 
-### 5.2 Step-by-Step Procedure
+```bash
+# Syntax
+tsk_recover [options] <image_file> <output_directory>
 
-**Step 1 — Open the evidence image**
+# Create output directory first
+mkdir C:\forensics\recovered_files\
 
-- Launch WinHex.
-- Use **File → Open** (or "Create New Case" workflow) and navigate to the location of the stored forensic image file.
-- WinHex displays options like **Data Interpreter** settings (8-bit, 16-bit, 32-bit) for how data should be interpreted/displayed.
+# Recover all files (allocated + unallocated)
+tsk_recover -f ntfs -e "C:\forensics\images\windows.dd" "C:\forensics\recovered_files\"
 
-**Step 2 — Access File Recovery by Type**
+# Options explained:
+# -f ntfs    → specify file system type
+# -e         → recover both allocated AND unallocated files
+# (without -e, only allocated files are recovered)
 
-- Navigate to: **Tools → Disk Tools → File Recovery by Type**.
-- This presents categories of recoverable file types, including:
-  - Images
-  - Documents
-  - Emails
-  - Internet activity artifacts
-  - Archive files
-  - Music/Videos
-  - Program files
+# For a specific partition offset (from mmls):
+tsk_recover -f ntfs -o 2048 -e "C:\forensics\images\windows.dd" "C:\forensics\recovered_files\"
+```
 
-**Step 3 — Select and recover**
+**After recovery you will find:**
 
-- Select the desired file type/category to recover (a smaller file type was chosen in the demo for speed).
-- Click **OK**, then specify a destination (e.g., Desktop) and confirm.
-- The tool processes and recovers matching files to the chosen destination, showing progress (e.g., in MB processed).
+```
+C:\forensics\recovered_files\
+├── orphan\                    ← Files with no directory entry (truly deleted)
+│   ├── file001.jpg
+│   ├── file002.docx
+│   └── ...
+├── Users\
+│   └── [username]\
+│       ├── Documents\
+│       ├── Downloads\
+│       └── Desktop\
+├── Windows\
+├── $Recycle.Bin\              ← Recycle bin contents
+└── ...
+```
 
-**Step 4 — Review recovered files**
+**Note on errors:**
+Errors during tsk_recover are normal and expected. Ignore `File not found` errors unless you see command syntax errors. The final count of recovered files is what matters.
 
-- Recovered files may be flagged with statuses such as:
-  - **"File recovered"**
-  - **"Mutilated"** (i.e., damaged/incomplete) or **"Corrupt"**
-- This distinction matters forensically — a recovered file marked as corrupt/mutilated may still hold partial evidentiary value but should be noted as such in documentation.
+### 6.2 Lab: Targeted File Recovery with icat
 
-### 5.3 Practical Observations
+**icat** extracts the content of a specific file by its MFT entry number.
 
-- Recovering a large number of files to one location (e.g., Desktop) can overload system resources/performance — the instructor experienced slowdowns from too many recovered files accumulating in one folder during the demo, and cleaned up afterward.
-- WinHex serves as another tool in the forensic toolkit alongside SS Data Recovery (Part 1) and The Sleuth Kit's `tsk_recover` — reinforcing the lesson that **using multiple tools** increases the chances of comprehensive recovery.
+```bash
+# First find the file's MFT entry number using fls
+fls -r -f ntfs "windows.dd" | grep "secret"
+# Output: r/r 1234-128-1:  secret_document.docx
+
+# Extract the file using its entry number (1234)
+icat -f ntfs "windows.dd" 1234 > "C:\forensics\recovered\secret_document.docx"
+
+# Verify the recovered file's hash
+sha256sum "C:\forensics\recovered\secret_document.docx"
+```
+
+### 6.3 Building a File Timeline
+
+```bash
+# Create a body file (timeline data for all files)
+fls -r -m / -f ntfs "windows.dd" > bodyfile.txt
+
+# Convert to timeline (mactime)
+mactime -b bodyfile.txt -d > timeline.csv
+
+# Open timeline.csv in Excel for analysis
+# Sort by date to see sequence of events
+```
 
 ---
 
-## 6. Forensic Image Formats — Theory
+## 7. WinHex — Advanced Data Recovery
 
-### 6.1 Why This Matters
+### 7.1 What Is WinHex?
 
-Just as regular photos/documents have formats (JPG, PNG, PDF, DOCX), **forensic disk images** also come in multiple standardized formats — each with different properties (compression, metadata support, tool compatibility). Understanding these is essential before creating an image, since the format chosen affects what data/metadata can be preserved and which tools can later open it.
+WinHex is a professional hex editor and forensic tool that operates at the **raw byte level**, allowing you to:
 
-### 6.2 RAW / DD Format
+- View and edit raw disk sectors
+- Recover deleted files by file type (file carving)
+- Analyze disk structures manually
+- Perform memory analysis
+- Search for specific byte patterns
 
-| Property             | Details                                                                                                                                      |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Definition**       | The exact, uncompressed, bit-by-bit (sector-by-sector) copy of the original media                                                            |
-| **Extension**        | No fixed/special extension — commonly `.dd` or `.img`                                                                                        |
-| **Compression**      | None — file size equals the original exactly                                                                                                 |
-| **Metadata storage** | None — no case details, examiner info, or investigation metadata stored within the image itself                                              |
-| **Tool support**     | Very wide — supported by Autopsy, The Sleuth Kit, FTK, EnCase ("Guy Manager" in transcript likely refers to EnCase), and most forensic tools |
-| **Best for**         | Preserving an exact, unaltered copy of evidence where raw fidelity is the priority                                                           |
+**Download:** https://www.x-ways.net/winhex/
 
-### 6.3 SMART Format
+### 7.2 Lab: File Recovery by Type (File Carving)
 
-| Property             | Details                                                                                                                                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Full form**        | Simple Management of Artifact Recovery Tools                                                                                                                              |
-| **Tool support**     | Limited — primarily supported by its native tool ("SMART" forensic software), described as **proprietary** (tied to a specific tool, unlike RAW/DD's broad compatibility) |
-| **Compression**      | Supported — can meaningfully reduce image size (e.g., compressing a 10GB image to ~5GB), useful when storage is limited during field investigations                       |
-| **Metadata storage** | Supported — stores timestamps and investigation-related details                                                                                                           |
-| **Checksum/Hash**    | Generates checksum/hash values automatically at creation time to support integrity verification                                                                           |
-| **Advantage**        | Saves storage via compression                                                                                                                                             |
-| **Disadvantage**     | Poor tool compatibility (proprietary/limited support)                                                                                                                     |
+File carving recovers files based on their **magic bytes** (file signature) regardless of file system damage.
 
-### 6.4 E01 (EnCase Evidence File) Format
+```
+Every file type starts with a unique byte signature:
 
-| Property                   | Details                                                                                                                                                                                                                               |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Origin**                 | Not invented by any single specific forensic case workflow — it is a widely adopted industry-standard format (commonly associated with EnCase)                                                                                        |
-| **Tool support**           | Broad — supported by many major forensic tools (e.g., FTK, Autopsy, EnCase-family tools)                                                                                                                                              |
-| **Metadata storage**       | Yes — records full case details, examiner info, and investigation metadata, similar to SMART                                                                                                                                          |
-| **Segmentation**           | Divides the image into **fixed-size segments/chunks** — commonly described in this session as ~2GB chunks (e.g., a 10GB drive could be split into multiple ~2GB segments) — making large images easier to handle, store, and transfer |
-| **Compression**            | Supported — saves storage                                                                                                                                                                                                             |
-| **Integrity verification** | Performs hash/checksum calculations automatically                                                                                                                                                                                     |
-| **Limitation**             | Considered semi-proprietary — not universally supported by every single tool, though support is wide in practice                                                                                                                      |
+File Type    Magic Bytes (Hex)       ASCII
+JPEG         FF D8 FF                ÿØÿ
+PNG          89 50 4E 47             .PNG
+PDF          25 50 44 46             %PDF
+ZIP          50 4B 03 04             PK..
+EXE/DLL      4D 5A                   MZ
+DOCX         50 4B 03 04             PK.. (ZIP-based)
+MP4          00 00 00 ?? 66 74 79 70 ....ftyp
+```
 
-### 6.5 AFF (Advanced Forensic Format)
+**Using WinHex for file carving:**
 
-| Property               | Details                                                                                                                   |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| **Key distinction**    | **Open-source** — unlike SMART and (to a lesser extent) E01, AFF is not tied to or restricted by any specific vendor/tool |
-| **Tool support**       | Broad/unrestricted in principle, due to its open nature                                                                   |
-| **Features supported** | Compression, metadata collection, **and encryption** (a feature not highlighted for the other formats in this session)    |
-| **Design purpose**     | Specifically designed for forensic evidence preservation and analysis, combining the strengths of the other formats       |
-| **Considered**         | A strong, flexible, "best of all worlds" option among the non-RAW formats                                                 |
+```
+Step 1: Open WinHex as Administrator
+Step 2: File → Open (select your forensic image .dd or .E01)
+Step 3: Tools → Disk Tools → File Recovery by Type
+Step 4: Select file types to recover:
+        ✅ Photos (JPG, PNG, GIF, BMP)
+        ✅ Documents (DOC, DOCX, PDF, XLS)
+        ✅ Videos (MP4, AVI, MOV)
+        ✅ Archives (ZIP, RAR)
+        ✅ Email (PST, EML)
+Step 5: Set output folder (different drive from source!)
+Step 6: Click OK → Start Recovery
+Step 7: Review recovery log
+        Shows: X files found, Y complete, Z incomplete/corrupt
+```
 
-### 6.6 MEM (Memory Image) Format
+**WinHex recovery output:**
 
-| Property                               | Details                                                                                                                                                                                                                     |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Definition**                         | Used specifically for capturing **volatile memory (RAM)** — i.e., a memory dump                                                                                                                                             |
-| **Key distinction from other formats** | All other formats (RAW/DD, SMART, E01, AFF) are intended for **non-volatile** storage media (hard disks, drives — data that persists without power). MEM is for **volatile** memory, which is lost when a system shuts down |
-| **When used**                          | If a system is found **powered on** during an investigation, a RAM/memory dump may be captured (in addition to disk imaging) before shutdown, since volatile data is otherwise lost                                         |
-| **Tool support**                       | Broadly usable for any volatile memory dump scenario — effectively the standard/open approach for RAM imaging                                                                                                               |
+```
+FileRecovery_Type_Log.txt — summary of all recovered files
+Recovered folders:
+├── JPG\        → recovered images
+├── PDF\        → recovered documents
+├── ZIP\        → recovered archives
+└── MP4\        → recovered videos
 
-### 6.7 Comparative Summary Table
+Note: Incomplete/corrupt files are partially recoverable
+      Open them anyway — may contain useful partial data
+```
 
-| Feature                      | RAW/DD                          | SMART                   | E01                               | AFF                                | MEM                           |
-| ---------------------------- | ------------------------------- | ----------------------- | --------------------------------- | ---------------------------------- | ----------------------------- |
-| **Compression**              | ❌ No                           | ✅ Yes                  | ✅ Yes                            | ✅ Yes                             | N/A (memory-specific)         |
-| **Metadata collection**      | ❌ No                           | ✅ Yes                  | ✅ Yes                            | ✅ Yes                             | N/A                           |
-| **Encryption support**       | ❌ No                           | ❌ No                   | ❌ No                             | ✅ Yes                             | N/A                           |
-| **File size (vs. original)** | Exact (1:1)                     | Reduced                 | Reduced                           | Reduced                            | N/A                           |
-| **Tool compatibility**       | Wide                            | Limited                 | Wide (but not universal)          | Wide (open source)                 | Used for RAM dumps            |
-| **Best suited for**          | Exact raw evidence preservation | Basic compression needs | Comprehensive case-managed images | Open, secure, comprehensive images | Volatile memory (RAM) capture |
+### 7.3 Viewing Raw Hex Data
 
-> **Practical guidance given:** Choose the format based on your specific needs — if metadata and encryption matter, RAW/DD is insufficient (it stores neither); if broad tool compatibility combined with strong feature support is the priority, AFF or E01 are generally preferred over SMART.
+```
+WinHex shows data in three columns:
+┌──────────┬──────────────────────────────────────┬──────────────────┐
+│ Offset   │ Hex Values (raw bytes)               │ ASCII Text       │
+├──────────┼──────────────────────────────────────┼──────────────────┤
+│ 00000000 │ FF D8 FF E0 00 10 4A 46 49 46 00 01  │ ÿØÿà..JFIF..    │
+│ 00000010 │ 01 00 00 01 00 01 00 00 FF E1 16 24  │ ........ÿá..$   │
+└──────────┴──────────────────────────────────────┴──────────────────┘
+
+Reading this:
+FF D8 FF = JPEG magic bytes → this is the start of a JPEG file
+The ASCII column shows readable text embedded in binary files
+```
 
 ---
 
-## 7. Creating Forensic Images — Practical (FTK Imager)
+## 8. Memory Forensics Basics
 
-### 7.1 Tool Used
+### 8.1 Why RAM Forensics Matters
 
-**FTK Imager** — a widely used, GUI-based forensic imaging tool capable of creating images in multiple formats (RAW/DD, SMART, E01, AFF).
+RAM (Random Access Memory) is **volatile** — it is erased when the computer is shut down. It can contain:
 
-### 7.2 Step-by-Step Procedure
+```
+✦ Running processes at time of seizure
+✦ Open network connections
+✦ Encryption keys (TrueCrypt, BitLocker keys!)
+✦ Recently typed passwords
+✦ Clipboard contents
+✦ Browser history (not yet written to disk)
+✦ Fileless malware (exists only in memory)
+✦ Decrypted versions of encrypted files
+✦ Injected malicious code in legitimate processes
+```
 
-**Step 1 — Start image creation**
+**The golden rule: If the computer is ON, image RAM FIRST before shutting it down.**
 
-- Open FTK Imager → **File → Create Disk Image**.
+### 8.2 Creating a RAM Dump
 
-**Step 2 — Select source type**
-Options presented:
+**Using WinPMEM (free):**
 
-- **Physical Drive** — the entire physical disk as installed in the system.
-- **Logical Drive** — a specific partition created via the operating system's partitioning (a "logical" division, since it's created in software rather than being a physically separate disk).
-- **Image File** — to create an image from an already-existing image file.
-- Other options: CD/DVD, contents of a folder, etc.
+```powershell
+# Download winpmem from GitHub
+# Run as Administrator
+winpmem.exe C:\forensics\ram_dump.mem
 
-> In the demo, **Physical Drive** was selected to image a complete drive.
+# The .mem file is your RAM image
+```
 
-**Step 3 — Select destination and format**
+**Using FTK Imager:**
 
-- Click **Add** to specify the destination for the new image.
-- Format options shown: **RAW/DD, SMART, E01, AFF**.
-- The instructor notes **E01** is often considered a strong/preferred choice since it includes broad metadata and reasonable compatibility, though **AFF** was earlier described as best for open/secure needs — the choice depends on the investigation's specific requirements (as summarized in the comparison table above).
+```
+FTK Imager → File → Capture Memory
+Output file: C:\forensics\ram_dump.mem
+Include pagefile: ✅ Yes (pagefile contains overflow from RAM)
+```
 
-**Step 4 — Enter case metadata**
-For formats that support metadata (SMART, E01, AFF), the following fields are typically completed:
+### 8.3 Analyzing RAM with Volatility (Free)
 
-- **Case Number**
-- **Evidence Number**
-- **Unique Description**
-- **Examiner** name
+Volatility is the industry-standard RAM forensics framework.
 
-**Step 5 — Choose destination path and image filename**
+**Download:** https://www.volatilityfoundation.org/
 
-- Browse to select the destination drive/folder (e.g., an M: drive in the demo).
-- Provide an **image filename**.
+```bash
+# Install Volatility 3
+pip install volatility3
 
-**Step 6 — Configure verification and finish**
+# Identify the OS profile
+vol -f ram_dump.mem windows.info
 
-- Option to **verify the image after creation** (recommended — confirms the image was created correctly and matches the source via hash comparison).
-- Start the imaging process.
+# List running processes
+vol -f ram_dump.mem windows.pslist
 
-### 7.3 Reviewing the Completed Image (E01 Example)
+# Find hidden/injected processes
+vol -f ram_dump.mem windows.pstree
+vol -f ram_dump.mem windows.malfind
 
-After completion, FTK Imager provides an **Image Summary**, which includes:
+# Network connections at time of capture
+vol -f ram_dump.mem windows.netstat
 
-- **Sector count** and verification calculation results (confirming no errors).
-- **MD5/hash algorithm results** — used to confirm the image is a verified, unaltered match of the source. (Any bad sectors/dead blocks would be reported here if present — none were found in this demo.)
-- **Metadata** — case number, examiner, creation timestamp, etc.
-- **Segmentation details** — the demo image was automatically split into **7 segments**, each approximately **1.46 GB**, with the final segment typically being smaller. This reflects the E01 format's chunk-based segmentation behavior described in the theory section.
+# List all DLLs loaded by each process
+vol -f ram_dump.mem windows.dlllist
 
-**On disk**, the resulting files appear as:
+# Extract command line history
+vol -f ram_dump.mem windows.cmdline
 
-- A **.E01** file (the first/primary segment, which others attach to when opened) and accompanying **.txt** record files documenting full hash values and image details.
-- Opening the first segment automatically links and loads all associated segments together as one complete image.
+# Find files referenced in memory
+vol -f ram_dump.mem windows.filescan
+
+# Dump a specific process's memory
+vol -f ram_dump.mem windows.memmap --pid 1234 --dump
+
+# Extract registry hives from memory
+vol -f ram_dump.mem windows.registry.hivelist
+```
+
+**Forensic value of RAM analysis:**
+
+```
+Scenario: Suspect encrypted files with VeraCrypt, then minimized it
+          (encryption software still running in RAM)
+
+RAM analysis reveals:
+  → VeraCrypt.exe running (process list)
+  → Encryption master key in memory (malfind / memdump)
+  → Mounted encrypted volume path
+  → Files recently accessed within encrypted container
+
+→ This is impossible to find on disk after shutdown!
+```
 
 ---
 
-## 8. Creating a Raw (DD) Image via Command Line
+## 9. Cheat Sheet — All Commands
 
-### 8.1 Purpose of This Section
+### TSK (The Sleuth Kit) Commands
 
-To demonstrate an **alternative, command-line-based method** for creating a forensic image — specifically in **RAW/DD format** — useful in scenarios where a GUI tool like FTK Imager isn't available or preferred.
+```bash
+# ── Partition Analysis ────────────────────────────────────
+mmls image.dd                          # List partition table
+mmls -t gpt image.dd                   # GPT partition table
 
-### 8.2 Tool Used
+# ── File System Analysis ──────────────────────────────────
+fsstat -f ntfs image.dd                # NTFS file system status
+fsstat -f fat32 image.dd               # FAT32 file system status
+img_stat image.dd                      # Image file information
 
-- **DD tool** for Windows (downloadable by searching "DD tool" online; in this demo it was placed on the Desktop).
-- **PowerShell** (run as Administrator) was used as the command-line environment for this section (distinct from the CMD environment used for The Sleuth Kit commands earlier).
+# ── MFT / Metadata Analysis ───────────────────────────────
+istat -f ntfs image.dd 0               # MFT entry #0
+istat -f ntfs image.dd 2               # LogFile entry
+istat -f ntfs image.dd 5               # Root directory
+istat -f ntfs image.dd 1234            # Specific file entry
 
-### 8.3 Step-by-Step Procedure
+# ── File Listing ─────────────────────────────────────────
+fls -f ntfs image.dd                   # List all files
+fls -r -f ntfs image.dd                # Recursive list
+fls -d -f ntfs image.dd                # Deleted files only
+fls -r -p -f ntfs image.dd            # Full paths
 
-**Step 1 — Identify available drives**
+# ── File Recovery ─────────────────────────────────────────
+tsk_recover -f ntfs -e image.dd /output/          # Recover all files
+icat -f ntfs image.dd 1234 > output.docx          # Extract specific file
 
-Command used:
-
-```
-wmic diskdrive list brief
-```
-
-_(Transcribed loosely as "WMIC Disk Drive List Brief" in the session — this is the standard Windows command to list physical disks.)_
-
-- This lists all physical drives connected to the system (e.g., **Physical Drive 0**, **Physical Drive 1**), along with identifying details (internal vs. external, drive names/models).
-- In the demo: **Drive 0** was identified as the internal/primary system drive (C:), and another listed drive was identified as an **external drive** based on its name/label.
-
-> **Tip:** Always carefully verify which physical drive number corresponds to your actual target before imaging — imaging the wrong drive is a critical, irreversible mistake in a real investigation.
-
-**Step 2 — Navigate to the DD tool location**
-
-```
-cd <path-to-DD-tool-folder>
-```
-
-**Step 3 — Run the DD imaging command**
-
-Command structure used:
-
-```
-dd.exe if=\\.\physicaldrive0 of=E:\WinVI0_Evidence.dd bs=512k --progress
+# ── Timeline Creation ─────────────────────────────────────
+fls -r -m / -f ntfs image.dd > body.txt           # Create body file
+mactime -b body.txt -d > timeline.csv             # Generate timeline
 ```
 
-**Flag explanations:**
-| Flag | Meaning |
-|---|---|
-| `if=` | **Input file** — the source being imaged (here, `\\.\physicaldrive0`, referring to Physical Drive 0) |
-| `of=` | **Output file** — destination path and filename for the resulting image (e.g., `E:\WinVI0_Evidence.dd`) |
-| `bs=` | **Block size** — set to `512k` (512 kilobytes) in this demo, controlling the chunk size used during copying |
-| `--progress` | Displays a live progress indicator during the copy/imaging process |
+### Imaging Commands
 
-**Naming convention used in the demo:** `WinVI0_Evidence.dd` — reflecting the source (Windows, drive 0) and labeling it clearly as evidence, a good practice for maintaining clear documentation/chain of custody.
+```bash
+# ── Linux/Kali Imaging ───────────────────────────────────
+dd if=/dev/sdb of=/mnt/ext/evidence.dd bs=4M status=progress
+dc3dd if=/dev/sdb of=/mnt/ext/evidence.dd hash=sha256 log=hashes.log
+ewfacquire /dev/sdb                    # Create E01 format
 
-### 8.4 Critical Storage Requirement
+# ── Hash Verification ─────────────────────────────────────
+md5sum evidence.dd
+sha256sum evidence.dd
+sha512sum evidence.dd
 
-> ⚠️ **Important:** Since **RAW/DD format applies no compression**, the destination drive must have **free space equal to or greater than the full size of the source drive** being imaged. In the demo, the source (C:) was ~60GB, so the destination needed at least 60GB free before starting — this was verified before proceeding.
+# ── Mount Image (Read-Only) ───────────────────────────────
+ewfmount evidence.E01 /mnt/ewf/
+mount -o ro,loop /mnt/ewf/ewf1 /mnt/evidence/
+```
 
-### 8.5 Result
+### Windows PowerShell
 
-- The DD imaging process completed successfully, producing a `.dd` image file matching the exact size of the source drive (~60GB in the demo).
-- This RAW/DD image can now be analyzed using The Sleuth Kit commands (`mmls`, `fsstat`, `istat`, `fls`, `tsk_recover`) covered earlier in this session, or other forensic tools, exactly as demonstrated with the other evidence images throughout this lab.
+```powershell
+# List all physical disks
+wmic diskdrive list brief /format:list
+
+# Calculate hashes
+Get-FileHash evidence.dd -Algorithm MD5
+Get-FileHash evidence.dd -Algorithm SHA256
+Get-FileHash evidence.dd -Algorithm SHA512
+
+# Compare two hashes (verification)
+(Get-FileHash source.dd -Algorithm SHA256).Hash -eq `
+(Get-FileHash image.dd -Algorithm SHA256).Hash
+```
+
+### Volatility Memory Forensics
+
+```bash
+# Basic analysis
+vol -f ram.mem windows.info            # OS information
+vol -f ram.mem windows.pslist          # Running processes
+vol -f ram.mem windows.pstree          # Process tree
+vol -f ram.mem windows.netstat         # Network connections
+vol -f ram.mem windows.cmdline         # Command line args
+vol -f ram.mem windows.malfind         # Hidden/injected code
+vol -f ram.mem windows.filescan        # File handles in memory
+vol -f ram.mem windows.hashdump        # Password hashes from memory
+```
 
 ---
 
-## 9. Key Takeaways
+## 📚 Key Concepts Summary
 
-1. **The Sleuth Kit provides a full command-line forensic workflow**: from partition table inspection (`mmls`) to file system status (`fsstat`), image statistics (`img_stat`), detailed MFT entry analysis (`istat`), file listing (`fls`), and file recovery (`tsk_recover`).
-2. **The Master File Table (MFT) is the structural core of NTFS** — every file/folder's metadata is stored in numbered entries, each containing standardized sub-attributes (Standard Information, File Name, Data, Bitmap, Security Descriptor).
-3. **Command-line forensic tools are syntax-sensitive** — missing spaces and incorrect flags are the most common sources of errors, not tool malfunction. Always double-check command structure.
-4. **Multiple recovery tools should be used together** (SS Data Recovery, WinHex, `tsk_recover`) since no single tool guarantees complete recovery of all deleted/damaged data.
-5. **Forensic image format selection matters significantly**:
-   - **RAW/DD** — exact copy, no compression, no metadata, but universal tool support.
-   - **SMART** — compression + metadata, but poor tool compatibility.
-   - **E01** — compression + metadata + segmentation, wide (though not universal) tool support.
-   - **AFF** — open-source, supports compression + metadata + **encryption**, broadest flexibility.
-   - **MEM** — specifically for volatile memory (RAM) dumps, used only when a system is captured while still powered on.
-6. **Always verify available destination storage before imaging** — RAW/DD images require space equal to the full source drive size since no compression is applied.
-7. **Image verification (hashing) immediately after creation** is essential to confirm the image is an accurate, unaltered copy of the source — this underpins the entire chain-of-custody and evidentiary integrity process covered across both parts of this series.
-
----
-
-## 10. Tools Used in This Session
-
-| Tool                     | Purpose                                                                                              |
-| ------------------------ | ---------------------------------------------------------------------------------------------------- |
-| **The Sleuth Kit (TSK)** | Command-line file system/image analysis: `mmls`, `fsstat`, `img_stat`, `istat`, `fls`, `tsk_recover` |
-| **WinHex**               | Hex editing and file recovery by type from forensic images                                           |
-| **FTK Imager**           | GUI-based forensic image creation (supports RAW/DD, SMART, E01, AFF formats)                         |
-| **DD (Windows port)**    | Command-line creation of RAW/DD forensic images                                                      |
-| **PowerShell / CMD**     | Command-line environments used for running forensic tool commands                                    |
+```
+File System     → How OS organizes data on disk (NTFS for Windows)
+Partition Table → Map of all partitions on a disk (MBR or GPT)
+MFT             → Master File Table — index of all files in NTFS
+MFT Entry       → Record for each file containing attributes
+$STANDARD_INFO  → File timestamps (MACB times)
+$FILE_NAME      → File name and parent directory
+$DATA           → Actual file content
+Slack Space     → Unused space at end of a cluster (contains old data)
+Unallocated     → Disk space not part of any active file system
+File Carving    → Recovery of files by their magic bytes, ignoring FS
+Timeline        → Chronological list of file system events (key for investigations)
+Write Blocker   → Hardware/software that prevents writes to evidence drive
+Volatile Memory → RAM — cleared on shutdown; image first!
+```
 
 ---
 
-_End of Part 2 — this concludes the file-system analysis and image-format segment of the practical series. Subsequent parts will build on these recovered images and formats for deeper investigative analysis._
+_This guide covers The Sleuth Kit command-line forensics, NTFS MFT structure, all forensic image formats, practical imaging with FTK Imager and dd, file carving with WinHex, and memory forensics with Volatility — all for educational use in authorized forensic lab environments._
